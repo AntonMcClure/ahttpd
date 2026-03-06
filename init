@@ -1,0 +1,62 @@
+#!/bin/sh
+# Aperture HTTPD
+# http://www.aperture.akron.oh.us/ahttpd/
+#
+# Copyright (C) 2025, 2026 Anton McClure <asm@aperture.akron.oh.us>
+# All rights reserved.  See EULA.txt for more details.
+
+### BEGIN INIT INFO
+# Provides:          ahttpd
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Aperture HTTPD
+# Description:       Aperture HTTPD
+### END INIT INFO
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+DESC="Aperture HTTPD"
+NAME=ahttpd
+DAEMON=/usr/local/bin/ahttpd
+PIDFILE=/run/$NAME.pid
+CHDIR=/usr/local/share/ahttpd
+
+. /lib/lsb/init-functions
+
+do_start() {
+    start-stop-daemon --start --quiet --exec $DAEMON --oknodo
+}
+
+do_stop() {
+    start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --exec $DAEMON --oknodo
+}
+
+case "$1" in
+  start)
+    log_daemon_msg "Starting $DESC" "$NAME"
+    do_start
+    log_end_msg $?
+    ;;
+  stop)
+    log_daemon_msg "Stopping $DESC" "$NAME"
+    do_stop
+    log_end_msg $?
+    ;;
+  restart|force-reload)
+    log_daemon_msg "Restarting $DESC" "$NAME"
+    do_stop
+    sleep 1
+    do_start
+    log_end_msg $?
+    ;;
+  status)
+    status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}" >&2
+    exit 3
+    ;;
+esac
+
+exit 0
