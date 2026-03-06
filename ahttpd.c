@@ -265,8 +265,8 @@ void send_error(int code, const char *errormsg, const char *message, const char 
                             "</body></html>",
                             code, errormsg, errormsg, message, AHTPV, name.sysname, host ? host : "localhost", port);
 
-    char response[BUF_SIZE];
-    int len = snprintf(response, sizeof(response),
+    char header[BUF_SIZE];
+    int header_len = snprintf(header, sizeof(header),
                        "HTTP/1.0 %d %s\r\n"
                        "Server: Aperture/%s (%s)\r\n"
                        "Date: %s\r\n"
@@ -274,13 +274,14 @@ void send_error(int code, const char *errormsg, const char *message, const char 
                        "Connection: close\r\n"
                        "Content-Type: text/html\r\n"
                        "X-Clacks-Overhead: GNU Terry Pratchett, J.C. \"Jay Bird\" McClure, Rev. James Berardi, John Falkenstein, Dr. Baffour Takyi, Coco Bean, Rev. Ralph Coletta\r\n"
-                       "\r\n"
-                       "%s",
-                       code, errormsg, AHTPV, name.sysname, datetime(), body_len, body);
+                       "\r\n",
+                       code, errormsg, AHTPV, name.sysname, datetime(), body_len);
 
     response_bytes = body_len;
     log_error_entry(code, errormsg);
-    ssize_t ret = client_write_all(response, (size_t)len);
+    ssize_t ret = client_write_all(header, (size_t)header_len);
+    (void)ret;
+    ret = client_write_all(body, (size_t)body_len);
     (void)ret;
 }
 
@@ -456,76 +457,8 @@ void send_directory(const char *dirpath, const char *urlpath, const char *host) 
 
     qsort(file_entries, num_entries, sizeof(FileEntry *), compare_entries);
 
-    size_t per_entry = (size_t)NAME_MAX * 12 + 140;
-    size_t body_size = BUF_SIZE + num_entries * per_entry;
-    char *body = malloc(body_size);
-    if (!body) {
-        for (size_t i = 0; i < num_entries; ++i) {
-            free(file_entries[i]->href); free(file_entries[i]->name);
-            free(file_entries[i]->date); free(file_entries[i]->size);
-            free(file_entries[i]);
-        }
-        free(file_entries);
-        send_error(500, "Internal Server Error", "<p>Internal server error.</p>", host);
-        return;
-    }
-
     struct utsname uname_buf;
     uname(&uname_buf);
-
-    char *escaped_urlpath = html_escape(urlpath);
-    size_t offset = 0;
-    offset += (size_t)snprintf(body + offset, body_size - offset,
-                               "<html><head><title>Index of %s</title></head>\n"
-                               "<body><h1>Index of %s</h1>\n<pre>",
-                               escaped_urlpath ? escaped_urlpath : urlpath,
-                               escaped_urlpath ? escaped_urlpath : urlpath);
-    free(escaped_urlpath);
-
-    if (strcmp(urlpath, "/") != 0) {
-        offset += (size_t)snprintf(body + offset, body_size - offset,
-                                   "<a href=\"../\">[To Parent Directory]</a>\n");
-    }
-
-    for (size_t i = 0; i < num_entries; ++i) {
-        FileEntry *curr = file_entries[i];
-        char *escaped_href = html_escape(curr->href);
-        char *escaped_name = html_escape(curr->name);
-
-        if (offset < body_size) {
-            int n;
-            if (strcmp(curr->size, "<dir>") == 0) {
-                n = snprintf(body + offset, body_size - offset,
-                             "%*s %10s <a href=\"%s\">%s</a>\n",
-                             (int)max_date_len, curr->date,
-                             "     &lt;dir&gt;",
-                             escaped_href, escaped_name);
-            } else {
-                n = snprintf(body + offset, body_size - offset,
-                             "%*s %10s <a href=\"%s\">%s</a>\n",
-                             (int)max_date_len, curr->date,
-                             curr->size,
-                             escaped_href, escaped_name);
-            }
-            if (n > 0 && (size_t)n < body_size - offset) offset += (size_t)n;
-        }
-        free(escaped_href);
-        free(escaped_name);
-    }
-
-    offset += (size_t)snprintf(body + offset, body_size - offset, "</pre>");
-
-    offset += (size_t)snprintf(body + offset, body_size - offset,
-                               "<hr><address>Aperture/%s (%s) Server at %s Port %d</address>"
-                               "</body></html>",
-                               AHTPV, uname_buf.sysname, host ? host : "localhost", port);
-
-    for (size_t i = 0; i < num_entries; ++i) {
-        free(file_entries[i]->href); free(file_entries[i]->name);
-        free(file_entries[i]->date); free(file_entries[i]->size);
-        free(file_entries[i]);
-    }
-    free(file_entries);
 
     if (!is_http09) {
         char canonical_path[1024];
@@ -536,21 +469,72 @@ void send_directory(const char *dirpath, const char *urlpath, const char *host) 
                                   "HTTP/1.0 200 OK\r\n"
                                   "Server: Aperture/%s\r\n"
                                   "Date: %s\r\n"
-                                  "Content-Length: %zu\r\n"
                                   "Connection: close\r\n"
                                   "Content-Type: text/html\r\n"
                                   "Link: <https://www.aperture.akron.oh.us%s>; rel=\"canonical\"\r\n"
                                   "X-Clacks-Overhead: GNU Terry Pratchett, J.C. \"Jay Bird\" McClure, Rev. James Berardi, John Falkenstein, Dr. Baffour Takyi, Coco Bean, Rev. Ralph Coletta\r\n"
                                   "\r\n",
-                                  AHTPV, datetime(), offset, canonical_path);
+                                  AHTPV, datetime(), canonical_path);
         ssize_t h_ret = client_write_all(header, (size_t)header_len);
         (void)h_ret;
     }
     response_status = 200;
-    response_bytes = (long)offset;
-    ssize_t b_ret = client_write_all(body, offset);
-    (void)b_ret;
-    free(body);
+
+    char chunk[BUF_SIZE];
+    int n;
+    long total_bytes = 0;
+
+    char *escaped_urlpath = html_escape(urlpath);
+    n = snprintf(chunk, sizeof(chunk),
+                 "<html><head><title>Index of %s</title></head>\n"
+                 "<body><h1>Index of %s</h1>\n<pre>",
+                 escaped_urlpath ? escaped_urlpath : urlpath,
+                 escaped_urlpath ? escaped_urlpath : urlpath);
+    free(escaped_urlpath);
+    if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
+
+    if (strcmp(urlpath, "/") != 0) {
+        n = snprintf(chunk, sizeof(chunk),
+                     "<a href=\"../\">[To Parent Directory]</a>\n");
+        if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
+    }
+
+    for (size_t i = 0; i < num_entries; ++i) {
+        FileEntry *curr = file_entries[i];
+        char *escaped_href = html_escape(curr->href);
+        char *escaped_name = html_escape(curr->name);
+
+        if (strcmp(curr->size, "<dir>") == 0) {
+            n = snprintf(chunk, sizeof(chunk),
+                         "%*s %10s <a href=\"%s\">%s</a>\n",
+                         (int)max_date_len, curr->date,
+                         "     &lt;dir&gt;",
+                         escaped_href, escaped_name);
+        } else {
+            n = snprintf(chunk, sizeof(chunk),
+                         "%*s %10s <a href=\"%s\">%s</a>\n",
+                         (int)max_date_len, curr->date,
+                         curr->size,
+                         escaped_href, escaped_name);
+        }
+        if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
+
+        free(escaped_href);
+        free(escaped_name);
+        free(curr->href); free(curr->name);
+        free(curr->date); free(curr->size);
+        free(curr);
+    }
+    free(file_entries);
+
+    n = snprintf(chunk, sizeof(chunk),
+                 "</pre>"
+                 "<hr><address>Aperture/%s (%s) Server at %s Port %d</address>"
+                 "</body></html>",
+                 AHTPV, uname_buf.sysname, host ? host : "localhost", port);
+    if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
+
+    response_bytes = total_bytes;
 }
 
 const char *get_mime_type(const char *filename) {
