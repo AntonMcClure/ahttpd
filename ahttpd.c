@@ -233,6 +233,11 @@ int is_safe_path(const char *requested_path) {
     if (strncmp(resolved, htdocs, htdocs_len) == 0 &&
         (resolved[htdocs_len] == '/' || resolved[htdocs_len] == '\0')) return 1;
 
+    const char *docdir = "/usr/share/doc";
+    size_t docdir_len = strlen(docdir);
+    if (strncmp(resolved, docdir, docdir_len) == 0 &&
+        (resolved[docdir_len] == '/' || resolved[docdir_len] == '\0')) return 1;
+
     const char *home = "/home/";
     size_t home_len = strlen(home);
     if (strncmp(resolved, home, home_len) == 0) {
@@ -464,17 +469,25 @@ void send_directory(const char *dirpath, const char *urlpath, const char *host) 
         char canonical_path[1024];
         make_canonical_path(urlpath, canonical_path, sizeof(canonical_path));
         sanitize_header_value(canonical_path);
+
+        int is_doc = (strncmp(urlpath, "/doc/", 5) == 0 || strcmp(urlpath, "/doc") == 0);
+
         char header[BUF_SIZE];
         int header_len = snprintf(header, sizeof(header),
                                   "HTTP/1.0 200 OK\r\n"
                                   "Server: Aperture/%s\r\n"
                                   "Date: %s\r\n"
                                   "Connection: close\r\n"
-                                  "Content-Type: text/html\r\n"
-                                  "Link: <https://www.aperture.akron.oh.us%s>; rel=\"canonical\"\r\n"
-                                  "X-Clacks-Overhead: GNU Terry Pratchett, J.C. \"Jay Bird\" McClure, Rev. James Berardi, John Falkenstein, Dr. Baffour Takyi, Coco Bean, Rev. Ralph Coletta\r\n"
-                                  "\r\n",
-                                  AHTPV, datetime(), canonical_path);
+                                  "Content-Type: text/html\r\n",
+                                  AHTPV, datetime());
+        if (is_doc)
+            header_len += snprintf(header + header_len, sizeof(header) - (size_t)header_len,
+                                   "X-Robots-Tag: noindex, nofollow\r\n");
+        header_len += snprintf(header + header_len, sizeof(header) - (size_t)header_len,
+                               "Link: <https://www.aperture.akron.oh.us%s>; rel=\"canonical\"\r\n"
+                               "X-Clacks-Overhead: GNU Terry Pratchett, J.C. \"Jay Bird\" McClure, Rev. James Berardi, John Falkenstein, Dr. Baffour Takyi, Coco Bean, Rev. Ralph Coletta\r\n"
+                               "\r\n",
+                               canonical_path);
         ssize_t h_ret = client_write_all(header, (size_t)header_len);
         (void)h_ret;
     }
@@ -548,6 +561,67 @@ const char *get_mime_type(const char *filename) {
     return "application/octet-stream";
 }
 
+static int ext_in_list(const char *ext, size_t ext_len, const char *list[], size_t list_count) {
+    for (size_t i = 0; i < list_count; i++) {
+        if (strlen(list[i]) == ext_len && strncasecmp(ext, list[i], ext_len) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static const char *find_last_dot(const char *s, size_t len) {
+    for (size_t i = len; i > 0; i--) {
+        if (s[i - 1] == '.') return s + i;
+    }
+    return NULL;
+}
+
+static const char *get_forced_type(const char *filename) {
+    static const char *plain_exts[] = {
+        "txt", "text", "asc", "csv", "tab", "tsv", "log",
+        "sig", "gpg", "pgp", "debian", "gz"
+    };
+    static const char *html_exts[] = {
+        "pot", "brf", "srt", "html", "htm", "shtml",
+        "xhtml", "mshtml", "mhtml"
+    };
+
+    const char *base = strrchr(filename, '/');
+    if (base) base++; else base = filename;
+
+    size_t len = strlen(base);
+    size_t check_len = len;
+
+    if (check_len > 7 && strncasecmp(base + check_len - 7, ".bak.gz", 7) == 0)
+        check_len -= 7;
+    else if (check_len > 4 && strncasecmp(base + check_len - 4, ".bak", 4) == 0)
+        check_len -= 4;
+    else if (check_len > 3 && strncasecmp(base + check_len - 3, ".gz", 3) == 0)
+        check_len -= 3;
+
+    const char *dot = find_last_dot(base, check_len);
+
+    /* If no extension found after stripping suffix, try the original name */
+    if (!dot) {
+        dot = find_last_dot(base, len);
+        if (!dot) return NULL;
+        check_len = len;
+    }
+
+    size_t ext_len = check_len - (size_t)(dot - base);
+
+    if (ext_in_list(dot, ext_len, html_exts, sizeof(html_exts) / sizeof(html_exts[0])))
+        return "text/html";
+    if (ext_in_list(dot, ext_len, plain_exts, sizeof(plain_exts) / sizeof(plain_exts[0])))
+        return "text/plain";
+    return NULL;
+}
+
+static int file_ends_with_gz(const char *filename) {
+    size_t len = strlen(filename);
+    return (len > 3 && strcasecmp(filename + len - 3, ".gz") == 0);
+}
+
 void send_file(const char *filepath, const char *urlpath, const char *host) {
     int fd = open(filepath, O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
@@ -568,6 +642,12 @@ void send_file(const char *filepath, const char *urlpath, const char *host) {
         char canonical_path[1024];
         make_canonical_path(urlpath, canonical_path, sizeof(canonical_path));
         sanitize_header_value(canonical_path);
+
+        const char *forced = get_forced_type(filepath);
+        const char *content_type = forced ? forced : get_mime_type(filepath);
+        int gzip = (forced && file_ends_with_gz(filepath));
+        int is_doc = (strncmp(urlpath, "/doc/", 5) == 0 || strcmp(urlpath, "/doc") == 0);
+
         char header[BUF_SIZE];
         int header_len = snprintf(header, sizeof(header),
                                   "HTTP/1.0 200 OK\r\n"
@@ -576,12 +656,20 @@ void send_file(const char *filepath, const char *urlpath, const char *host) {
                                   "Last-Modified: %s\r\n"
                                   "Content-Length: %ld\r\n"
                                   "Connection: close\r\n"
-                                  "Content-Type: %s\r\n"
-                                  "Link: <https://www.aperture.akron.oh.us%s>; rel=\"canonical\"\r\n"
-                                  "X-Clacks-Overhead: GNU Terry Pratchett, J.C. \"Jay Bird\" McClure, Rev. James Berardi, John Falkenstein, Dr. Baffour Takyi, Coco Bean, Rev. Ralph Coletta\r\n"
-                                  "\r\n",
+                                  "Content-Type: %s\r\n",
                                   AHTPV, datetime(), lastmod, (long)st.st_size,
-                                  get_mime_type(filepath), canonical_path);
+                                  content_type);
+        if (gzip)
+            header_len += snprintf(header + header_len, sizeof(header) - (size_t)header_len,
+                                   "Content-Encoding: gzip\r\n");
+        if (is_doc)
+            header_len += snprintf(header + header_len, sizeof(header) - (size_t)header_len,
+                                   "X-Robots-Tag: noindex, nofollow\r\n");
+        header_len += snprintf(header + header_len, sizeof(header) - (size_t)header_len,
+                               "Link: <https://www.aperture.akron.oh.us%s>; rel=\"canonical\"\r\n"
+                               "X-Clacks-Overhead: GNU Terry Pratchett, J.C. \"Jay Bird\" McClure, Rev. James Berardi, John Falkenstein, Dr. Baffour Takyi, Coco Bean, Rev. Ralph Coletta\r\n"
+                               "\r\n",
+                               canonical_path);
 
         ssize_t h_ret = client_write_all(header, (size_t)header_len);
         (void)h_ret;
@@ -987,6 +1075,13 @@ static void handle_client(int client_fd, struct sockaddr_in *client_addr,
             subpath = "/";
         }
         snprintf(filepath, sizeof(filepath), "/home/%s/www%s", username, subpath);
+    } else if (strcmp(path, "/doc") == 0 || strncmp(path, "/doc/", 5) == 0) {
+        const char *doc_prefix = "/doc";
+        const char *subpath = path + strlen(doc_prefix);
+        if (subpath[0] == '\0')
+            snprintf(filepath, sizeof(filepath), "/usr/share/doc");
+        else
+            snprintf(filepath, sizeof(filepath), "/usr/share/doc%s", subpath);
     } else {
         const char *host_root_dir = "/srv";
         snprintf(filepath, sizeof(filepath), "%s%s", host_root_dir, path);
