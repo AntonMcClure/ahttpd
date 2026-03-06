@@ -569,6 +569,13 @@ static int ext_in_list(const char *ext, size_t ext_len, const char *list[], size
     return 0;
 }
 
+static const char *find_last_dot(const char *s, size_t len) {
+    for (size_t i = len; i > 0; i--) {
+        if (s[i - 1] == '.') return s + i;
+    }
+    return NULL;
+}
+
 static const char *get_forced_type(const char *filename) {
     static const char *plain_exts[] = {
         "txt", "text", "asc", "csv", "tab", "tsv", "log",
@@ -592,17 +599,11 @@ static const char *get_forced_type(const char *filename) {
     else if (check_len > 3 && strncasecmp(base + check_len - 3, ".gz", 3) == 0)
         check_len -= 3;
 
-    const char *dot = NULL;
-    for (size_t i = check_len; i > 0; i--) {
-        if (base[i - 1] == '.') { dot = base + i; break; }
-    }
+    const char *dot = find_last_dot(base, check_len);
 
     /* If no extension found after stripping suffix, try the original name */
     if (!dot) {
-        dot = NULL;
-        for (size_t i = len; i > 0; i--) {
-            if (base[i - 1] == '.') { dot = base + i; break; }
-        }
+        dot = find_last_dot(base, len);
         if (!dot) return NULL;
         check_len = len;
     }
@@ -1075,7 +1076,8 @@ static void handle_client(int client_fd, struct sockaddr_in *client_addr,
         }
         snprintf(filepath, sizeof(filepath), "/home/%s/www%s", username, subpath);
     } else if (strcmp(path, "/doc") == 0 || strncmp(path, "/doc/", 5) == 0) {
-        const char *subpath = path + 4;
+        const char *doc_prefix = "/doc";
+        const char *subpath = path + strlen(doc_prefix);
         if (subpath[0] == '\0')
             snprintf(filepath, sizeof(filepath), "/usr/share/doc");
         else
