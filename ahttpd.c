@@ -491,12 +491,12 @@ void send_directory(const char *dirpath, const char *urlpath, const char *host) 
                  escaped_urlpath ? escaped_urlpath : urlpath,
                  escaped_urlpath ? escaped_urlpath : urlpath);
     free(escaped_urlpath);
-    if (n > 0) { client_write_all(chunk, (size_t)n); total_bytes += n; }
+    if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
 
     if (strcmp(urlpath, "/") != 0) {
         n = snprintf(chunk, sizeof(chunk),
                      "<a href=\"../\">[To Parent Directory]</a>\n");
-        if (n > 0) { client_write_all(chunk, (size_t)n); total_bytes += n; }
+        if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
     }
 
     for (size_t i = 0; i < num_entries; ++i) {
@@ -517,7 +517,7 @@ void send_directory(const char *dirpath, const char *urlpath, const char *host) 
                          curr->size,
                          escaped_href, escaped_name);
         }
-        if (n > 0) { client_write_all(chunk, (size_t)n); total_bytes += n; }
+        if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
 
         free(escaped_href);
         free(escaped_name);
@@ -532,7 +532,7 @@ void send_directory(const char *dirpath, const char *urlpath, const char *host) 
                  "<hr><address>Aperture/%s (%s) Server at %s Port %d</address>"
                  "</body></html>",
                  AHTPV, uname_buf.sysname, host ? host : "localhost", port);
-    if (n > 0) { client_write_all(chunk, (size_t)n); total_bytes += n; }
+    if (n > 0) { size_t len = (size_t)n < sizeof(chunk) ? (size_t)n : sizeof(chunk) - 1; client_write_all(chunk, len); total_bytes += (long)len; }
 
     response_bytes = total_bytes;
 }
